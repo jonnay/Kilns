@@ -6,6 +6,7 @@
 (in-package #:kilns)
 
 (defvar *top-kell*)
+(defvar *local-kell*)
 
 (define-condition kiln-error (error)
   ()
@@ -16,14 +17,15 @@
   ((name :initarg :name))
   (:report (lambda (condition stream)
              (format stream
-                     "Can't have two kells with the same name (~a) in the same kell."
+                     "Can't have two kells with the same name (~a) in the same ~
+                      kell."
                      (slot-value condition 'name)))))
 
 (define-condition no-such-kell-error (kiln-error)
   ((name :initarg :name)
    (container :initarg :container))
   (:report (lambda (condition stream)
-             (format stream "No kell named ~a within ~a"
+             (format stream "No kell named ~a within ~a."
                      (slot-value condition 'name)
                      (slot-value condition 'container)))))
 
@@ -58,7 +60,11 @@
   (defun clear-events ()
     "THIS NEEDS TO BE THREADSAFE"
     (with-lock-held (lock)
-      (setf *event-queue* '()))))
+      (setf *event-queue* '())))
+
+  (defun remove-events-for-kell (kell)
+    (with-lock-held (lock)
+      (setf *event-queue* (delete kell *event-queue* :key #'third)))))
 
 (defmacro lock-neighboring-kells ((kell) &body body)
   "This ensures that we always lock kells from the outermost to the innermost,
@@ -79,8 +85,8 @@
                      (reverse subkells))))))))
 
 (defparameter *debugp* nil
-  "If T, errors will dump you to the debugger (although you still need to do some work
-   to be in the correct thread to _use_ the debugger).")
+  "If T, errors will dump you to the debugger (although you still need to do
+   some work to be in the correct thread to _use_ the debugger).")
 
 (defun handle-error (c)
   (if *debugp*
@@ -101,8 +107,8 @@
     collecting (make-thread #'run-kiln :name (format nil "kiln ~d" i))))
 
 (defgeneric apply-restriction (local-name global-name process &optional expandp)
-  (:documentation "DESTRUCTIVE. Returns the process with all restrictions expanded to
-                   have unique names.")
+  (:documentation "DESTRUCTIVE. Returns the process with all restrictions
+                   expanded to have unique names.")
   (:method (local-name global-name process &optional (expandp t))
     (declare (ignore local-name global-name expandp))
     process)
@@ -201,7 +207,7 @@
             (push process (gethash (name pattern) (kell-patterns kell))))
           (kell-message-pattern (pattern process)))
     (list (list #'match-on process kell)))
-  (:method ((process (eql null-process)) (kell kell))
+  (:method ((process null-process) (kell kell))
     (declare (ignore kell))
     '()))
 
@@ -267,67 +273,30 @@
         (setf current-kell new-kell)
         (error 'no-such-kell-error :name kell-name :container current-kell)))
     (values))
-  (defun toplevel (&optional cpu-count)
+  (defun toplevel (&optional cpu-count local-kell)
     (unless cpu-count (setf cpu-count (get-cpu-count)))
-    (let* ((*top-kell* (make-instance 'kell :name (gensym "LOCALHOST")))
-           (kilns (start-kilns cpu-count))
+    (let* ((*top-kell* (make-instance (if local-kell 'network-kell 'kell)
+                         :name (gensym "TOP")))
            (*package* (find-package :kilns-user))
-           (*readtable* *kilns-readtable*))
-      ;; dummy kell for now, to handle locking and other places we refer to
-      ;; parents
-      (setf current-kell *top-kell*
-            (parent *top-kell*)
-            (make-instance 'kell :name (gensym "NETWORK") :process *top-kell*))
-      (unwind-protect
-          (loop do
-            (printk "~a> " (name current-kell))
-            (handler-case (let ((process (eval (read))))
-                            (add-process process current-kell))
-              (end-of-file () (return))
-              (kiln-error (c) (handle-error c))))
-        (mapc #'destroy-thread kilns)
-        (clear-events)))))
-
-(defgeneric duplicate-process (process)
-  (:documentation "Does what it says – makes a deep copy of the process.
-                   The goal is to get rid of this once our runtime
-                   behaves in a more functional manner.")
-  (:method (process)
-    process)
-  (:method ((process cons))
-    (mapcar #'duplicate-process process))
-  (:method ((process message))
-    (make-instance 'message
-      :name (duplicate-process (name process))
-      :process (duplicate-process (process process))
-      :continuation (duplicate-process (continuation process))))
-  (:method ((process kell))
-    (make-instance 'kell
-      :name (duplicate-process (name process))
-      :process (duplicate-process (process process))
-      :continuation (duplicate-process (continuation process))))
-  (:method ((process pattern))
-    (let ((pattern (make-instance 'pattern)))
-      (psetf (local-message-pattern pattern)
-             (duplicate-process (local-message-pattern process))
-             (down-message-pattern pattern)
-             (duplicate-process (down-message-pattern process))
-             (up-message-pattern pattern)
-             (duplicate-process (up-message-pattern process))
-             (kell-message-pattern pattern)
-             (duplicate-process (kell-message-pattern process)))
-      pattern))
-  (:method ((process trigger))
-    (make-instance 'trigger
-      :pattern (duplicate-process (pattern process))
-      :process (duplicate-process (process process))))
-  (:method ((process parallel-composition))
-    (apply #'parallel-composition
-           (map-parallel-composition #'duplicate-process process)))
-  (:method ((process restriction))
-    (make-instance 'restriction
-      :name (duplicate-process (name process))
-      :process (duplicate-process (process process)))))
+           (*readtable* *kilns-readtable*)
+           (*local-kell* (when local-kell (intern local-kell))))
+      (ccl::def-standard-initial-binding *package* (find-package :kilns-user))
+      (ccl::def-standard-initial-binding *readtable* *kilns-readtable*)
+      (let ((kilns (start-kilns cpu-count)))
+        ;; dummy kell for now, to handle locking and other places we refer to
+        ;; parents
+        (setf current-kell *top-kell*
+              (parent *top-kell*)
+              (make-instance 'network-kell :name (gensym "OUTSIDE") :process *top-kell*))
+        (unwind-protect
+            (loop do
+              (printk "~a> " (name current-kell))
+              (handler-case (let ((process (eval (read))))
+                              (add-process process current-kell))
+                (end-of-file () (return))
+                (kiln-error (c) (handle-error c))))
+          (mapc #'destroy-thread kilns)
+          (clear-events))))))
 
 (defgeneric remove-process (process)
   (:method ((process message))
@@ -336,9 +305,8 @@
       (setf (gethash (name process) (messages kell))
             (delete process (gethash (name process) (messages kell))))))
   (:method ((process kell))
-    ;; FIXME: also need to remove anything referring to this kell from the
-    ;;        event-queue
     (let ((kell (parent process)))
+      (remove-events-for-kell process)
       (remove-process-from process kell)
       (setf (gethash (name process) (kells kell))
             (delete process (gethash (name process) (kells kell))))))
@@ -388,7 +356,7 @@
                        (list (find-process-variable-value process-variable mapping))))
                    (process-variables-in process))))
       (reduce #'compose-processes (cons process substituted-processes)
-              :initial-value null-process))))
+              :initial-value null))))
 
 (defgeneric replace-name (name mapping &optional ignored-vars)
   (:method (name mapping &optional ignored-vars)
@@ -414,82 +382,83 @@
 (defgeneric substitute-variables (mapping process &optional ignored-vars)
   (:documentation "Replaces all the variables in place.")
   (:method (mapping process &optional ignored-vars)
-    (declare (ignore mapping process ignored-vars))
-    (values))
+    (declare (ignore mapping ignored-vars))
+    process)
   (:method (mapping (process cons) &optional ignored-vars)
-    (setf (car process) (replace-variables (car process) mapping ignored-vars)
-          (cdr process) (replace-variables (cdr process) mapping ignored-vars)))
+    (let ((new-process (cons (replace-variables (car process) mapping ignored-vars)
+                             (replace-variables (cdr process) mapping ignored-vars))))
+      (if (free-variables new-process)
+        new-process
+        (eval new-process))))
   (:method (mapping (process message) &optional ignored-vars)
-    (mapc (lambda (proc) (substitute-variables mapping proc ignored-vars))
-          (append (messages-in (process process))
-                  (kells-in (process process))
-                  (triggers-in (process process))
-                  (primitives-in (process process))
-                  (messages-in (continuation process))
-                  (kells-in (continuation process))
-                  (triggers-in (continuation process))
-                  (primitives-in (continuation process))))
-    (psetf (name process) (replace-name (name process) mapping ignored-vars)
-           (process process) (replace-variables (process process) mapping
-                                                ignored-vars)
-           (continuation process) (replace-variables (continuation process)
-                                                     mapping
-                                                     ignored-vars)))
+    (make-instance 'message
+      :name (replace-name (name process) mapping ignored-vars)
+      :process (replace-variables
+                (map-process (lambda (proc)
+                               (substitute-variables mapping proc ignored-vars))
+                             (process process))
+                mapping
+                ignored-vars)
+      :continuation (replace-variables
+                     (map-process (lambda (proc)
+                                    (substitute-variables mapping proc
+                                                          ignored-vars))
+                                  (continuation process))
+                     mapping
+                     ignored-vars)))
   (:method (mapping (process kell) &optional ignored-vars)
-    (mapc (lambda (proc) (substitute-variables mapping proc ignored-vars))
-          (append (messages-in (process process))
-                  (kells-in (process process))
-                  (triggers-in (process process))
-                  (primitives-in (process process))
-                  (messages-in (continuation process))
-                  (kells-in (continuation process))
-                  (triggers-in (continuation process))
-                  (primitives-in (continuation process))))
-    (psetf (name process) (replace-name (name process) mapping ignored-vars)
-           (process process) (replace-variables (process process) mapping
-                                                ignored-vars)
-           (continuation process) (replace-variables (continuation process)
-                                                     mapping
-                                                     ignored-vars)))
+    (make-instance 'kell
+      :name (replace-name (name process) mapping ignored-vars)
+      :process (replace-variables
+                (map-process (lambda (proc)
+                               (substitute-variables mapping proc ignored-vars))
+                             (process process))
+                mapping
+                ignored-vars)
+      :continuation (replace-variables
+                     (map-process (lambda (proc)
+                                    (substitute-variables mapping proc
+                                                          ignored-vars))
+                                  (continuation process))
+                     mapping
+                     ignored-vars)))
   (:method (mapping (process trigger) &optional ignored-vars)
     (let ((ignored-vars (append (bound-names (pattern process))
                                 (bound-variables (pattern process))
                                 ignored-vars)))
-      (mapc (lambda (proc) (substitute-variables mapping proc ignored-vars))
-            (append (local-message-pattern (pattern process))
-                    (down-message-pattern (pattern process))
-                    (up-message-pattern (pattern process))
-                    (kell-message-pattern (pattern process))
-                    (messages-in (process process))
-                    (kells-in (process process))
-                    (triggers-in (process process))
-                    (primitives-in (process process))))
-      (psetf (pattern process) (replace-variables (pattern process) mapping
-                                                  ignored-vars)
-             (process process) (replace-variables (process process) mapping
-                                                  ignored-vars))))
+      (make-instance 'trigger
+        :pattern (replace-variables (make-instance 'pattern
+                                      :local-message-pattern (mapcar (lambda (proc) (substitute-variables mapping proc ignored-vars))
+                                                                     (local-message-pattern (pattern process)))
+                                      :down-message-pattern (mapcar (lambda (proc) (substitute-variables mapping proc ignored-vars))
+                                                                    (down-message-pattern (pattern process)))
+                                      :up-message-pattern (mapcar (lambda (proc) (substitute-variables mapping proc ignored-vars))
+                                                                  (up-message-pattern (pattern process)))
+                                      :kell-message-pattern (mapcar (lambda (proc) (substitute-variables mapping proc ignored-vars))
+                                                                    (kell-message-pattern (pattern process))))
+                                    mapping
+                                    ignored-vars)
+        :process (replace-variables (map-process (lambda (proc) (substitute-variables mapping proc ignored-vars))
+                                                 (process process))
+                                    mapping
+                                    ignored-vars))))
   (:method (mapping (process restriction) &optional ignored-vars)
-    (mapc (lambda (proc) (substitute-variables mapping proc ignored-vars))
-          (append (messages-in (process process))
-                  (kells-in (process process))
-                  (triggers-in (process process))
-                  (primitives-in (process process))))
-    (psetf (process process) (replace-variables (process process) mapping
-                                                ignored-vars))))
+    (make-instance 'restriction
+      :name (name process)
+      :process (replace-variables (map-process (lambda (proc) (substitute-variables mapping proc ignored-vars))
+                                               (process process))
+                                  mapping
+                                  ignored-vars))))
 
 (defmethod trigger-process ((trigger trigger) mapping)
   "Activates process after substituting the process-variables in the trigger."
-  ;; FIXME: basically a copy of substitute-variables (t trigger), except we
-  ;;        don't ignore the vars, because this is the trigger that's actually
-  ;;        triggering.
-  (let ((process (duplicate-process (process trigger))))
-    (remove-process trigger)
-    (mapc (lambda (proc) (substitute-variables mapping proc))
-          (append (messages-in process)
-                  (kells-in process)
-                  (triggers-in process)
-                  (primitives-in process)))
-    (add-process (replace-variables process mapping) (parent trigger))))
+  (remove-process trigger)
+  (add-process (replace-variables (map-process (lambda (proc)
+                                                 (substitute-variables mapping
+                                                                       proc))
+                                               (process trigger))
+                                  mapping)
+               (parent trigger)))
 
 (defmethod activate-continuation (process)
     (remove-process process)
@@ -699,7 +668,7 @@
 (defmethod activate-process
            ((process application-abstraction) (kell kell))
   (remove-process process)
-  (add-process (@ (abstraction process) (concretion-process)) kell))
+  (add-process (@ (abstraction process) (concretion process)) kell))
 (defmethod activate-process
            ((process restriction-abstraction) (kell kell))
   (remove-process process)
