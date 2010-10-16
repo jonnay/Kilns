@@ -14,3 +14,28 @@ been paid any attention, and it'll probably crash a lot.
 The current implementation is written in Common Lisp. If you have a lisp
 installed and the requisite libraries (Bordeaux Threads, CL Unification, IOLib,
 etc.), poking at the `build-application.*` scripts should get you going.
+
+## Building for Lisp Newbs
+
+Get a copy of CCL using macports:
+    sudo port install ccl
+
+You may need to modify the build-applicaiton.sh to point to ccl properly. Change it to:
+    /opt/local/share/ccl/1.5/dx86cl64 --load "build-application"
+
+Add quicklisp to the kilns directory (http://www.quicklisp.org/beta/)
+
+Try running the build-application.sh, it will error out, just type
+	:POP
+
+Then the following:
+	(ql:quickload "bordeaux-threads")
+	(ql:quickload "cl-unification")
+	(ql:add-to-init-file)
+
+Press enter when promped.  The (ql:add-to-init-file) will make it so you don't have to go through the rigama-roll all over again.
+
+To get out of the lisp interpreter, type
+    (quit)
+
+Then try running the build-application.sh script again!
