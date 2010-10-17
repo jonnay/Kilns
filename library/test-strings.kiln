@@ -1,0 +1,10 @@
+(load "library/simple-components")
+(load "library/utilities")
+(include-component "library/simple-io")
+
+{echo "Testing Strings -- Stupid echo out to console tests."}
+{echo "Length Test"}
+{string-length (list "test" {echo})}
+{echo "Concat Test"}
+{string-concat (list "test " "concat" {echo})}
+
