@@ -8,7 +8,7 @@
 (defmethod print-object ((obj null-process) stream)
   (princ "null" stream))
 
-(defvar null-process (make-instance 'null-process))
+(defvar null (make-instance 'null-process))
 
 (defclass process-variable (process)
   ((name :initarg :name :type symbol :reader name))
@@ -24,7 +24,12 @@
 (defun process-variable (name)
   (make-instance 'process-variable :name name))
 
-(defclass name-variable ()
+(defclass name-type ()
+  ()
+  (:documentation
+   "This gives us a class to hang pattern-language extensions to names off of."))
+
+(defclass name-variable (name-type)
   ((name :initarg :name :type symbol :reader name))
   (:documentation
    "These only exist in “potential” processes. When a trigger is triggered, we
@@ -38,43 +43,38 @@
 (defun name-variable (name)
   (make-instance 'name-variable :name name))
 
-(defclass trigger (process)
-  ((pattern :initarg :pattern :type pattern :accessor pattern)
-   (process :initarg :process :type generic-process :accessor process)))
+(deftype name ()
+  `(or symbol integer name-type))
 
-(defmethod print-object ((obj trigger) stream)
-  (if (and (slot-boundp obj 'pattern)
-           (slot-boundp obj 'process))
-    (format stream "(trigger ~a ~a)" (pattern obj) (process obj))
-    (call-next-method)))
+(deftype identifier ()
+  `(or name process-variable))
 
-(defun trigger (pattern process)
-  (make-instance 'trigger
-    :pattern (convert-process-to-pattern pattern) :process process))
+(defclass trigger (process pattern-abstraction)
+  ())
 
-(defclass restriction (process)
-  ((name :initarg :name :reader name)
-   (process :initarg :process :type generic-process :accessor process))
-  (:documentation
-   "We store everything in normal form, which means that restrictions don't
-    actually exist, per se. They are all brought to the top-level as global
-    channels with uniqified names (and the original name retained as a
-   “nickname”). This also simplifies the communication of restricted channels,
-    as only the unique name needs to be shared, and no handling of scope needs
-    to be managed."))
+(defmacro trigger (pattern process)
+  `(make-instance 'trigger
+     :pattern (convert-process-to-pattern ,pattern) :process ,process))
 
-(defmethod print-object ((obj restriction) stream)
-  (format stream "(new ~a ~a)" (name obj) (process obj)))
+(defmethod print-object ((obj pattern-abstraction) stream)
+  (format stream "(trigger ~a ~a)" (pattern obj) (process obj)))
 
-(defun restriction (name process)
-  (make-instance 'restriction :name name :process process))
+(defclass restriction (process restriction-abstraction)
+  ())
+
+(defmacro new (names process)
+  `(make-instance 'restriction
+     :names (if (consp ',names) ',names (list ',names)) :abstraction ,process))
+
+(defmethod print-object ((obj restriction-abstraction) stream)
+  (format stream "(new ~a ~a)" (names obj) (abstraction obj)))
 
 ;;; FIXME: need  a better name
 (defclass message-structure (process)
-  ((name :initarg :name :accessor name)
-   (process :initarg :process :initform null-process :type generic-process
+  ((name :initarg :name :accessor name :type name)
+   (process :initarg :process :initform null :type generic-process
             :accessor process)
-   (continuation :initarg :continuation :initform null-process
+   (continuation :initarg :continuation :initform null
                  :type (or process (member up down))
                  :accessor continuation))
   (:documentation "The commonalities between messages and kells."))
@@ -88,10 +88,10 @@
            (slot-boundp obj 'continuation))
     (format stream "{~a~:[ ~a~:[ ~a~;~]~;~]}"
             (name obj)
-            (and (eql (process obj) null-process)
-                 (eql (continuation obj) null-process))
+            (and (eql (process obj) null)
+                 (eql (continuation obj) null))
             (process obj)
-            (eql (continuation obj) null-process)
+            (eql (continuation obj) null)
             (continuation obj))
     (call-next-method)))
 
@@ -133,7 +133,7 @@
 (defmethod print-object ((obj kell) stream)
   (format stream "[~a ~a~:[ ~a~;~]]"
           (name obj) (process obj)
-          (eql (continuation obj) null-process) (continuation obj)))
+          (eql (continuation obj) null) (continuation obj)))
 
 (defclass parallel-composition (process)
   ((process-variables :initform nil :type list :accessor process-variables)
@@ -154,7 +154,7 @@
           (map-parallel-composition #'identity obj)))
 
 (defun parallel-composition (&rest processes)
-  (reduce #'compose-processes processes :initial-value null-process))
+  (reduce #'compose-processes processes :initial-value null))
 
 (defun map-parallel-composition (fn pc)
   (append (mapcar fn (process-variables pc))
@@ -195,7 +195,7 @@
         (setf (process-variables par)
               (delete process (process-variables par)))
         (case (length (map-parallel-composition #'identity par))
-          (0 null-process)
+          (0 null)
           (1 (car (map-parallel-composition #'identity par)))
           (otherwise par)))
       (error "The (variable) process ~a is not contained in ~a, and thus can ~
@@ -203,14 +203,14 @@
              process par)))
   (:method ((process process-variable) (var process-variable))
     (if (find process (process-variables-in var))
-      null-process
+      null
       (error "The (variable) process ~a is not contained in ~a, and thus can ~
               not be removed."
              process var)))
   (:method ((process process-variable) trigger)
     (if (find process (process-variables-in (process trigger)))
       (typecase (process trigger)
-        (process-variable (setf (process trigger) null-process))
+        (process-variable (setf (process trigger) null))
         (parallel-composition (setf (process-variables (process trigger))
                                     (delete process
                                             (process-variables
@@ -218,7 +218,7 @@
                               (case (length (map-parallel-composition
                                              #'identity
                                              (process trigger)))
-                                (0 (setf (process trigger) null-process))
+                                (0 (setf (process trigger) null))
                                 (1 (setf (process trigger)
                                          (car (map-parallel-composition
                                                #'identity
@@ -229,13 +229,13 @@
   (:method ((process message) kell)
     (if (find process (messages-in (process kell)))
       (typecase (process kell)
-        (message (setf (process kell) null-process))
+        (message (setf (process kell) null))
         (parallel-composition (setf (messages (process kell))
                                     (delete process (messages (process kell))))
                               (case (length (map-parallel-composition
                                              #'identity
                                              (process kell)))
-                                (0 (setf (process kell) null-process))
+                                (0 (setf (process kell) null))
                                 (1 (setf (process kell)
                                          (car (map-parallel-composition
                                                #'identity
@@ -246,13 +246,13 @@
   (:method ((process kell) kell)
     (if (find process (kells-in (process kell)))
       (typecase (process kell)
-        (kell (setf (process kell) null-process))
+        (kell (setf (process kell) null))
         (parallel-composition (setf (kells (process kell))
                                     (delete process (kells (process kell))))
                               (case (length (map-parallel-composition
                                              #'identity
                                              (process kell)))
-                                (0 (setf (process kell) null-process))
+                                (0 (setf (process kell) null))
                                 (1 (setf (process kell)
                                          (car (map-parallel-composition
                                                #'identity
@@ -263,13 +263,13 @@
   (:method ((process trigger) kell)
     (if (find process (triggers-in (process kell)))
       (typecase (process kell)
-        (trigger (setf (process kell) null-process))
+        (trigger (setf (process kell) null))
         (parallel-composition (setf (triggers (process kell))
                                     (delete process (triggers (process kell))))
                               (case (length (map-parallel-composition
                                              #'identity
                                              (process kell)))
-                                (0 (setf (process kell) null-process))
+                                (0 (setf (process kell) null))
                                 (1 (setf (process kell)
                                          (car (map-parallel-composition
                                                #'identity
@@ -286,12 +286,12 @@
                               (case (length (map-parallel-composition
                                              #'identity
                                              (process kell)))
-                                (0 (setf (process kell) null-process))
+                                (0 (setf (process kell) null))
                                 (1 (setf (process kell)
                                          (car (map-parallel-composition
                                                #'identity
                                                (process kell)))))))
-        (t (setf (process kell) null-process)))
+        (t (setf (process kell) null)))
       (error "The (restriction) process ~a is not contained in ~a, and thus ~
               can not be removed."
              process (process kell)))))
