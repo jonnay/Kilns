@@ -44,7 +44,7 @@ For more information, see http://github.com/sellout/Kilns")
 ;;
 ;;  `inferior-kilns-binary-path'
 ;;    The path to the kilns executable with trailing slash.
-;;    default = "~/projects/kilns-binary/"
+;;    default = "~/projects/Kilns/"
 ;;  `inferior-kilns-binary'
 ;;    The name of the kilns executable.
 ;;    default = "kilns"
@@ -59,11 +59,11 @@ For more information, see http://github.com/sellout/Kilns")
 
 (require 'comint)
 
-(defcustom inferior-kilns-binary-path "~/projects/kilns-binary/"
+(defcustom inferior-kilns-binary-path "~/projects/Kilns/"
   "The path to the kilns executable with trailing slash.
 
 This should not include the name of the kilns binary."
-  :type 'path
+  :type 'file
   :group 'kilns-minor-mode)
 
 (defcustom inferior-kilns-binary "kilns"

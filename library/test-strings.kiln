@@ -1,6 +1,7 @@
 (load "library/simple-components")
 (load "library/utilities")
 (include-component "library/simple-io")
+(include-component "library/strings")
 
 {echo "Testing Strings -- Stupid echo out to console tests."}
 {echo "Length Test"}

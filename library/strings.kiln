@@ -3,7 +3,7 @@
 (load "library/simple-components")
 
 (trigger* {string-concat (list ?a ?b {?rc}) up}
-          {component-out {rc (lisp (cl:concatenate 'string #.?a #.?b))}})
+          {component-out {rc (lisp (cl:concatenate 'cl:string #.?a #.?b))}})
 
 (trigger* {string-length (list ?str {?rc}) up}
 		  {component-out {rc (lisp (cl:length #.?str))}})
